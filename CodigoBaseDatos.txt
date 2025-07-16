@@ -1,0 +1,123 @@
+#include <LiquidCrystal.h>
+#include <DHT.h>
+
+// Pines
+const int bombaAgua = 8;
+const int sensorTemp = 9;
+
+// Variables
+float temp;
+float hum;
+
+// Objetos
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
+DHT dht(sensorTemp, DHT11);
+
+// Variables para controlar el tiempo sin usar delay() que bloquea
+unsigned long ultimaLecturaDHT = 0;
+const long intervaloLecturaDHT = 2000; // Leer cada 2 segundos
+unsigned long inicioRiego = 0;
+const long duracionRiego = 5000; // Regar por 5 segundos
+
+// Estado actual del sistema para saber qué mostrar
+enum EstadoSistema { MOSTRANDO_DATOS, REGANDO, ERROR_SENSOR };
+EstadoSistema estadoActual = MOSTRANDO_DATOS;
+
+void setup() {
+  Serial.begin(9600);
+  lcd.begin(16, 2);
+  lcd.print("Iniciando...");
+
+  pinMode(bombaAgua, OUTPUT);
+  digitalWrite(bombaAgua, HIGH); // Bomba apagada por defecto (relé NO)
+
+  dht.begin();
+  Serial.println("Sistema de Riego Automatico Iniciado.");
+  delay(2000); // Dar un poco de tiempo al DHT para inicializarse
+  lcd.clear(); // Limpiar la pantalla después del mensaje de inicio
+}
+
+void loop() {
+  unsigned long tiempoActual = millis(); // Obtener el tiempo actual
+
+  // --- Lógica principal basada en el estado del sistema ---
+  switch (estadoActual) {
+    case MOSTRANDO_DATOS:
+      // Leer DHT solo si ha pasado el intervalo de tiempo
+      if (tiempoActual - ultimaLecturaDHT >= intervaloLecturaDHT) {
+        ultimaLecturaDHT = tiempoActual;
+        Serial.println("Leyendo sensor DHT...");
+        hum = dht.readHumidity();
+        temp = dht.readTemperature();
+
+        if (isnan(hum) || isnan(temp)) {
+          estadoActual = ERROR_SENSOR; // Cambiar a estado de error
+          lcd.clear(); // Limpiar para el mensaje de error
+          Serial.println("Error: No se pudo leer el sensor DHT!");
+        } else {
+          // Mostrar datos si la lectura fue exitosa
+          lcd.clear(); // Limpiar antes de mostrar datos
+          lcd.setCursor(0, 0);
+          lcd.print("Temp: ");
+          lcd.print(temp, 1);
+          lcd.print(" C");
+
+          lcd.setCursor(0, 1);
+          lcd.print("Hum: ");
+          lcd.print(hum, 1);
+          lcd.print(" %");
+
+          Serial.print("Temperatura: ");
+          Serial.print(temp, 1);
+          Serial.print(" C\t");
+          Serial.print("Humedad: ");
+          Serial.print(hum, 1);
+          Serial.println(" %");
+
+          // Verificar condiciones de riego
+          if (hum >= 20.0 && temp >= 21.0) {
+            digitalWrite(bombaAgua, LOW); // Activar bomba
+            inicioRiego = tiempoActual; // Registrar el inicio del riego
+            estadoActual = REGANDO; // Cambiar a estado de riego
+            lcd.clear(); // Limpiar para el mensaje de riego
+            Serial.println("Condiciones de riego cumplidas: Bomba ON.");
+          } else {
+            digitalWrite(bombaAgua, HIGH); // Asegurar que la bomba esté apagada
+            Serial.println("Condiciones de riego NO cumplidas: Bomba OFF.");
+          }
+        }
+      }
+      break;
+
+    case REGANDO:
+      // Mostrar mensaje de riego
+      lcd.setCursor(0, 0);
+      lcd.print("****Regando****");
+      lcd.setCursor(0, 1);
+      lcd.print("Por Sensor...");
+
+      // Verificar si ha pasado el tiempo de riego
+      if (tiempoActual - inicioRiego >= duracionRiego) {
+        digitalWrite(bombaAgua, HIGH); // Apagar bomba
+        Serial.println("Riego completado: Bomba OFF.");
+        estadoActual = MOSTRANDO_DATOS; // Volver al estado normal
+        lcd.clear(); // Limpiar la pantalla para la siguiente información
+      }
+      break;
+
+    case ERROR_SENSOR:
+      // Mostrar mensaje de error (ya limpiado y mostrado en el if de error)
+      lcd.setCursor(0, 0);
+      lcd.print("****ERROR*****");
+      lcd.setCursor(0, 1);
+      lcd.print("**NO SENSOR**");
+
+      // Esperar antes de intentar de nuevo
+      if (tiempoActual - ultimaLecturaDHT >= intervaloLecturaDHT) {
+          ultimaLecturaDHT = tiempoActual; // Resetear el contador para re-intentar
+          estadoActual = MOSTRANDO_DATOS; // Intentar leer el sensor de nuevo
+          lcd.clear(); // Limpiar antes de intentar mostrar datos
+      }
+      break;
+  }
+}
